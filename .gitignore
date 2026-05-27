@@ -1,0 +1,30 @@
+# ── Claude / assistant files ───────────────────────────────────────────────
+CLAUDE.md
+.claude/
+
+# ── Python ─────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# ── Node / frontend ──────────────────────────────────────────────────────────
+node_modules/
+frontend/dist/
+*.log
+npm-debug.log*
+
+# ── App output / temp artifacts ──────────────────────────────────────────────
+output/
+*.tmp
+
+# ── Editor / OS ──────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

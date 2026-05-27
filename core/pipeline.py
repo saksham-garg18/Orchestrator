@@ -11,6 +11,7 @@ from .effects import (
     apply_8d_effect,
     apply_stereo_pan,
 )
+from .equalizer import apply_eq
 from .mastering import reduce_noise_if_available, loudness_normalize
 from .separation import separate_stems_demucs
 
@@ -30,16 +31,17 @@ def process_audio_file(
     pan: float | None = None,
     mastering_target_lufs: float = -14.0,
     mastering_peak_dbfs: float = -1.0,
+    eq_gains_db: list[float] | None = None,
+    eq_q: float = 1.41,
+    output_basename: str = "processed",
 ) -> dict:
     """
-    Load → analyse → transform → save.
+    Load → analyse → EQ → transform → master → spatial → save.
 
-    Returns a dict with bpm, key, key_confidence, sample_rate, output_path.
+    eq_gains_db: list of 16 floats (dB gain per band). None = skip EQ.
     """
     out_dir = ensure_dir(output_dir)
     audio, sr = load_audio(input_path, mono=False)
-
-    # Mono mix used for analysis only
     mono_ref = np.mean(audio, axis=0) if audio.ndim == 2 else audio
 
     bpm = calculate_bpm(mono_ref, sr)
@@ -47,7 +49,11 @@ def process_audio_file(
 
     processed = audio.copy()
 
-    # ── 1. Time stretch ──────────────────────────────────────────────────────
+    # ── 1. EQ ────────────────────────────────────────────────────────────────
+    if eq_gains_db is not None:
+        processed = apply_eq(processed, sr, eq_gains_db, Q=eq_q)
+
+    # ── 2. Time stretch ──────────────────────────────────────────────────────
     if stretch_rate != 1.0:
         if processed.ndim == 1:
             processed = time_stretch_audio(processed, stretch_rate)
@@ -56,7 +62,7 @@ def process_audio_file(
                 [time_stretch_audio(ch, stretch_rate) for ch in processed]
             )
 
-    # ── 2. Pitch shift ───────────────────────────────────────────────────────
+    # ── 3. Pitch shift ───────────────────────────────────────────────────────
     if pitch_steps != 0.0:
         if processed.ndim == 1:
             processed = pitch_shift_audio(processed, sr, pitch_steps)
@@ -65,7 +71,7 @@ def process_audio_file(
                 [pitch_shift_audio(ch, sr, pitch_steps) for ch in processed]
             )
 
-    # ── 3. Noise reduction ───────────────────────────────────────────────────
+    # ── 4. Noise reduction ───────────────────────────────────────────────────
     if apply_noise_reduction:
         if processed.ndim == 1:
             processed = reduce_noise_if_available(processed, sr)
@@ -74,7 +80,7 @@ def process_audio_file(
                 [reduce_noise_if_available(ch, sr) for ch in processed]
             )
 
-    # ── 4. Loudness mastering ────────────────────────────────────────────────
+    # ── 5. Loudness mastering ────────────────────────────────────────────────
     if apply_mastering:
         processed = loudness_normalize(
             processed, sr,
@@ -82,15 +88,15 @@ def process_audio_file(
             target_peak_dbfs=mastering_peak_dbfs,
         )
 
-    # ── 5. 8D effect ─────────────────────────────────────────────────────────
+    # ── 6. 8D effect ─────────────────────────────────────────────────────────
     if enable_8d:
         processed = apply_8d_effect(processed, sr)
 
-    # ── 6. Manual stereo pan ─────────────────────────────────────────────────
+    # ── 7. Manual stereo pan ─────────────────────────────────────────────────
     if pan is not None:
         processed = apply_stereo_pan(processed, pan)
 
-    output_path = Path(out_dir) / "processed.wav"
+    output_path = Path(out_dir) / f"{output_basename}.wav"
     save_audio(output_path, processed, sr)
 
     return {
@@ -112,13 +118,10 @@ def process_stems_with_positions(
     positions: Dict[str, float],
     apply_8d: bool = False,
     eight_d_depth: float = 0.5,
+    eq_gains_db: list[float] | None = None,
+    eq_q: float = 1.41,
+    output_basename: str = "stem_mix",
 ) -> str:
-    """
-    Load each stem from stems_dir, pan to its position, optionally add a
-    light 8D motion pass, sum everything, and save to output_dir/stem_mix.wav.
-
-    positions: {"vocals": 0.0, "drums": -0.3, "bass": 0.2, "other": 0.6}
-    """
     stems_dir = Path(stems_dir)
     out_dir = ensure_dir(output_dir)
 
@@ -126,7 +129,6 @@ def process_stems_with_positions(
     sr_final: int | None = None
 
     for stem_name, pan_value in positions.items():
-        # Accept wav, mp3, flac …
         candidates = (
             list(stems_dir.glob(f"{stem_name}.wav"))
             + list(stems_dir.glob(f"{stem_name}.mp3"))
@@ -137,6 +139,11 @@ def process_stems_with_positions(
             continue
 
         audio, sr = load_audio(candidates[0], mono=False)
+
+        # Per-stem EQ (same curve applied to each stem before panning)
+        if eq_gains_db is not None:
+            audio = apply_eq(audio, sr, eq_gains_db, Q=eq_q)
+
         stem_audio = apply_stereo_pan(audio, pan_value)
 
         if apply_8d:
@@ -151,16 +158,14 @@ def process_stems_with_positions(
 
     if mix is None or sr_final is None:
         raise FileNotFoundError(
-            f"No matching stems found in {stems_dir}. "
-            "Check that Demucs separation has run."
+            f"No matching stems found in {stems_dir}."
         )
 
-    # Prevent clipping after summing stems
     peak = np.max(np.abs(mix))
     if peak > 1.0:
         mix /= peak
 
-    output_path = out_dir / "stem_mix.wav"
+    output_path = out_dir / f"{output_basename}.wav"
     save_audio(output_path, mix, sr_final)
     return str(output_path)
 
@@ -172,19 +177,19 @@ def separate_and_render_stems(
     model: str = "htdemucs",
     apply_8d: bool = False,
     eight_d_depth: float = 0.5,
+    eq_gains_db: list[float] | None = None,
+    eq_q: float = 1.41,
+    output_basename: str = "stem_mix",
 ) -> dict:
-    """
-    End-to-end: separate with Demucs → pan each stem → optional 8D pass → mix.
-
-    Returns {"stems_dir": ..., "mix_path": ...}
-    """
     stems_dir = separate_stems_demucs(input_path, output_dir, model=model)
-    active_stems = {k: v for k, v in positions.items() if k in selected_stems}
     mix_path = process_stems_with_positions(
         str(stems_dir),
         output_dir,
         positions,
         apply_8d=apply_8d,
         eight_d_depth=eight_d_depth,
+        eq_gains_db=eq_gains_db,
+        eq_q=eq_q,
+        output_basename=output_basename,
     )
     return {"stems_dir": str(stems_dir), "mix_path": mix_path}

@@ -1,5 +1,6 @@
 from pathlib import Path
 import subprocess
+import sys
 
 
 def separate_stems_demucs(
@@ -28,7 +29,8 @@ def separate_stems_demucs(
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
 
-    cmd = ["python", "-m", "demucs", "-n", model, input_path, "-o", str(output)]
+    # Run Demucs through a local wrapper that patches torchaudio loading.
+    cmd = [sys.executable, "-m", "core.demucs_runner", "-n", model, input_path, "-o", str(output)]
     if mp3:
         cmd += ["--mp3", "--mp3-bitrate", str(mp3_bitrate)]
 
