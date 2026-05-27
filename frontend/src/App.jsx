@@ -463,7 +463,7 @@ function App() {
 
       <header className="topbar">
         <div>
-          <div className="brand">AudioForge</div>
+          <div className="brand">Orchestrator</div>
           <div className="brand-subtitle">An obsidian console for mastering, separation, EQ, and spatial audio</div>
         </div>
         <div className="topbar__actions">
